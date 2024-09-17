@@ -1,0 +1,591 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Advanced Intelligent Amoeba Simulation</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #001f3f;
+            font-family: Arial, sans-serif;
+            color: #ffffff;
+        }
+        canvas {
+            display: block;
+        }
+        #controls {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background-color: rgba(255, 255, 255, 0.1);
+            padding: 10px;
+            border-radius: 5px;
+        }
+        button {
+            margin: 5px;
+            padding: 5px 10px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="simulationCanvas"></canvas>
+    <div id="controls">
+        <button id="addAmoeba">Add Amoeba</button>
+        <button id="removeAmoeba">Remove Amoeba</button>
+        <button id="addFood">Add Food (5)</button>
+        <button id="togglePredator">Toggle Predator</button>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('simulationCanvas');
+        const ctx = canvas.getContext('2d');
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+
+        class Amoeba {
+            constructor(x, y, color) {
+                this.x = x;
+                this.y = y;
+                this.color = color;
+                this.radius = 20;
+                this.velocity = { x: 0, y: 0 };
+                this.acceleration = { x: 0, y: 0 };
+                this.score = 0;
+                this.energy = 100;
+                this.timeSinceLastMeal = 0;
+                this.communications = 0;
+                this.state = 'exploring';
+                this.restTimer = 0;
+                this.personality = {
+                    curiosity: Math.random() * 0.5 + 0.5,
+                    sociability: Math.random() * 0.5 + 0.5,
+                    hunger: Math.random(),
+                    caution: Math.random() * 0.5 + 0.5
+                };
+                this.memory = {
+                    lastFoodLocation: null,
+                    knownFoodLocations: [],
+                    dangerLocations: [],
+                    communicatedInfo: []
+                };
+                this.learningRate = 0.02;
+                this.generation = 1;
+                this.visionRange = 250;
+            }
+
+            think(foods, amoebas, predators) {
+                this.updateMemory(foods, predators);
+                
+                if (this.isInDanger(predators)) {
+                    this.state = 'fleeing';
+                } else if (this.energy < 30 || foods.length > 0 || this.memory.knownFoodLocations.length > 0) {
+                    this.state = 'seeking_food';
+                } else if (this.energy < 10) {
+                    this.state = 'resting';
+                    this.restTimer = 100 * (1 - this.personality.curiosity);
+                } else {
+                    this.state = 'exploring';
+                }
+
+                if (this.state === 'resting') {
+                    this.restTimer--;
+                    if (this.restTimer <= 0) {
+                        this.state = 'exploring';
+                    }
+                }
+
+                this.learn();
+            }
+
+            updateMemory(foods, predators) {
+                this.memory.knownFoodLocations = this.memory.knownFoodLocations.filter(loc => 
+                    foods.some(food => Math.hypot(food.x - loc.x, food.y - loc.y) < 10)
+                );
+
+                foods.forEach(food => {
+                    if (Math.hypot(food.x - this.x, food.y - this.y) < this.visionRange && 
+                        !this.memory.knownFoodLocations.some(loc => Math.hypot(food.x - loc.x, food.y - loc.y) < 10)) {
+                        this.memory.knownFoodLocations.push({x: food.x, y: food.y});
+                    }
+                });
+
+                this.memory.dangerLocations = predators.map(p => ({x: p.x, y: p.y}));
+            }
+
+            isInDanger(predators) {
+                return predators.some(p => Math.hypot(p.x - this.x, p.y - this.y) < this.visionRange * 1.5);
+            }
+
+            learn() {
+                if (this.energy > 80) {
+                    this.personality.hunger = Math.max(this.personality.hunger - this.learningRate, 0);
+                } else if (this.energy < 20) {
+                    this.personality.hunger = Math.min(this.personality.hunger + this.learningRate, 1);
+                }
+
+                if (this.isInDanger([])) {
+                    this.personality.caution = Math.min(this.personality.caution + this.learningRate, 1);
+                } else {
+                    this.personality.caution = Math.max(this.personality.caution - this.learningRate / 2, 0);
+                }
+
+                if (this.communications > 0) {
+                    this.personality.sociability = Math.min(this.personality.sociability + this.learningRate / 10, 1);
+                } else {
+                    this.personality.sociability = Math.max(this.personality.sociability - this.learningRate / 20, 0);
+                }
+            }
+
+            move(foods, amoebas, predators) {
+                this.acceleration = { x: 0, y: 0 };
+
+                if (this.state === 'resting') {
+                    this.velocity.x *= 0.9;
+                    this.velocity.y *= 0.9;
+                    return;
+                }
+
+                // Enhanced exploration behavior
+                const explorationIntensity = this.personality.curiosity * (1 - this.personality.caution);
+                this.acceleration.x += (Math.random() - 0.5) * explorationIntensity;
+                this.acceleration.y += (Math.random() - 0.5) * explorationIntensity;
+
+                let target = null;
+
+                if (this.state === 'seeking_food') {
+                    target = this.findNearestFood(foods) || this.findNearestFood(this.memory.knownFoodLocations);
+                } else if (this.state === 'fleeing') {
+                    const nearestPredator = this.findNearestPredator(predators);
+                    if (nearestPredator) {
+                        const dx = nearestPredator.x - this.x;
+                        const dy = nearestPredator.y - this.y;
+                        const distance = Math.hypot(dx, dy);
+                        const fleeIntensity = 0.3 * this.personality.caution * (1 - distance / (this.visionRange * 1.5));
+                        this.acceleration.x -= dx / distance * fleeIntensity;
+                        this.acceleration.y -= dy / distance * fleeIntensity;
+                        
+                        // Add some randomness to the fleeing direction
+                        this.acceleration.x += (Math.random() - 0.5) * fleeIntensity * 0.5;
+                        this.acceleration.y += (Math.random() - 0.5) * fleeIntensity * 0.5;
+                    }
+                }
+
+                if (target && this.state !== 'fleeing') {
+                    const dx = target.x - this.x;
+                    const dy = target.y - this.y;
+                    const distance = Math.sqrt(dx * dx + dy * dy);
+                    const seekIntensity = (1 + this.personality.hunger) * (1 - this.personality.caution);
+                    this.acceleration.x += dx / distance * seekIntensity * 0.1;
+                    this.acceleration.y += dy / distance * seekIntensity * 0.1;
+                }
+
+                this.avoidCollisions(amoebas);
+                this.avoidPredators(predators);
+                this.communicate(amoebas);
+
+                // Update velocity and position
+                this.velocity.x += this.acceleration.x;
+                this.velocity.y += this.acceleration.y;
+                this.velocity.x *= 0.98;
+                this.velocity.y *= 0.98;
+
+                const maxVelocity = this.state === 'fleeing' ? 5 + this.personality.caution * 2 : 3 + this.personality.curiosity * 2;
+                const speed = Math.sqrt(this.velocity.x ** 2 + this.velocity.y ** 2);
+                if (speed > maxVelocity) {
+                    this.velocity.x = (this.velocity.x / speed) * maxVelocity;
+                    this.velocity.y = (this.velocity.y / speed) * maxVelocity;
+                }
+
+                this.x += this.velocity.x;
+                this.y += this.velocity.y;
+
+                // Constrain to canvas boundaries
+                this.x = Math.max(this.radius, Math.min(this.x, canvas.width - this.radius));
+                this.y = Math.max(this.radius, Math.min(this.y, canvas.height - this.radius));
+            }
+
+            avoidCollisions(amoebas) {
+                for (let other of amoebas) {
+                    if (other !== this) {
+                        const dx = other.x - this.x;
+                        const dy = other.y - this.y;
+                        const distance = Math.sqrt(dx * dx + dy * dy);
+                        const minDistance = this.radius + other.radius;
+                        
+                        if (distance < minDistance + 10) {
+                            const angle = Math.atan2(dy, dx);
+                            const repelForce = 1 - (distance / (minDistance + 10));
+                            this.acceleration.x -= Math.cos(angle) * repelForce * 0.5;
+                            this.acceleration.y -= Math.sin(angle) * repelForce * 0.5;
+                        }
+                    }
+                }
+            }
+
+            avoidPredators(predators) {
+                for (let predator of predators) {
+                    const dx = predator.x - this.x;
+                    const dy = predator.y - this.y;
+                    const distance = Math.sqrt(dx * dx + dy * dy);
+                    const dangerZone = this.radius + predator.radius + this.visionRange;
+                    
+                    if (distance < dangerZone) {
+                        const angle = Math.atan2(dy, dx);
+                        const repelForce = 1 - (distance / dangerZone);
+                        this.acceleration.x -= Math.cos(angle) * repelForce * 3 * this.personality.caution;
+                        this.acceleration.y -= Math.sin(angle) * repelForce * 3 * this.personality.caution;
+                    }
+                }
+            }
+
+            communicate(amoebas) {
+                for (let other of amoebas) {
+                    if (other !== this) {
+                        const distance = Math.hypot(other.x - this.x, other.y - this.y);
+                        if (distance < this.visionRange) {
+                            this.communications++;
+                            other.communications++;
+
+                            if (this.memory.knownFoodLocations.length > 0 && Math.random() < this.personality.sociability) {
+                                const sharedLocation = this.memory.knownFoodLocations[Math.floor(Math.random() * this.memory.knownFoodLocations.length)];
+                                if (!other.memory.knownFoodLocations.some(loc => Math.hypot(loc.x - sharedLocation.x, loc.y - sharedLocation.y) < 10)) {
+                                    other.memory.knownFoodLocations.push(sharedLocation);
+                                    other.memory.communicatedInfo.push({type: 'food', location: sharedLocation});
+                                }
+                            }
+
+                            if (this.memory.dangerLocations.length > 0) {
+                                const sharedDanger = this.memory.dangerLocations[Math.floor(Math.random() * this.memory.dangerLocations.length)];
+                                if (!other.memory.dangerLocations.some(loc => Math.hypot(loc.x - sharedDanger.x, loc.y - sharedDanger.y) < 10)) {
+                                    other.memory.dangerLocations.push(sharedDanger);
+                                    other.memory.communicatedInfo.push({type: 'danger', location: sharedDanger});
+                                }
+                            }
+
+                            // Teaching/Learning
+                            if (this.generation > other.generation) {
+                                other.personality = {
+                                    ...other.personality,
+                                    curiosity: (other.personality.curiosity + this.personality.curiosity) / 2,
+                                    caution: (other.personality.caution + this.personality.caution) / 2
+                                };
+                                other.memory.communicatedInfo.push({type: 'teaching', from: this.generation});
+                            }
+                        }
+                    }
+                }
+            }
+
+            findNearestFood(foodList) {
+                let nearestDist = Infinity;
+                let nearestFood = null;
+                for (let food of foodList) {
+                    const dist = Math.hypot(this.x - food.x, this.y - food.y);
+                    if (dist < nearestDist) {
+                        nearestDist = dist;
+                        nearestFood = food;
+                    }
+                }
+                return nearestFood;
+            }
+
+            findNearestPredator(predators) {
+                let nearestDist = Infinity;
+                let nearestPredator = null;
+                for (let predator of predators) {
+                    const dist = Math.hypot(this.x - predator.x, this.y - predator.y);
+                    if (dist < nearestDist) {
+                        nearestDist = dist;
+                        nearestPredator = predator;
+                    }
+                }
+                return nearestPredator;
+            }
+
+            eat(foods) {
+                for (let i = foods.length - 1; i >= 0; i--) {
+                    if (Math.hypot(this.x - foods[i].x, this.y - foods[i].y) < this.radius) {
+                        foods.splice(i, 1);
+                        this.score += 10;
+                        this.energy = Math.min(this.energy + 20, 100);
+                        this.radius = Math.min(this.radius + 0.5, 30);
+                        this.timeSinceLastMeal = 0;
+                        this.memory.lastFoodLocation = {x: this.x, y: this.y};
+                    }
+                }
+            }
+
+            update(foods, amoebas, predators, deltaTime) {
+                this.think(foods, amoebas, predators);
+                this.move(foods, amoebas, predators);
+                this.eat(foods);
+
+                this.energy = Math.max(this.energy - 0.001 * deltaTime, 0);
+                this.timeSinceLastMeal += deltaTime;
+
+                if (this.timeSinceLastMeal > 60000 && foods.length > 0) {
+                    this.energy = Math.max(this.energy - 0.005 * deltaTime, 0);
+                    this.radius = Math.max(this.radius - 0.0005 * deltaTime, 10);
+                }
+
+                // Enhanced memory decay
+                this.memory.knownFoodLocations = this.memory.knownFoodLocations.filter(() => Math.random() > 0.0001 * deltaTime);
+                this.memory.dangerLocations = this.memory.dangerLocations.filter(() => Math.random() > 0.0002 * deltaTime);
+
+                if (this.energy <= 0) {
+                    return false; // Amoeba dies
+                }
+
+                if (this.energy > 90 && Math.random() < 0.001) {
+                    return this.reproduce();
+                }
+
+                return true; // Amoeba survives
+            }
+
+            reproduce() {
+                const childX = this.x + (Math.random() - 0.5) * 20;
+                const childY = this.y + (Math.random() - 0.5) * 20;
+                const child = new Amoeba(childX, childY, this.color);
+                
+                // Inherit traits with slight mutations
+                for (let trait in this.personality) {
+                    child.personality[trait] = Math.max(0, Math.min(1, this.personality[trait] + (Math.random() - 0.5) * 0.1));
+                }
+                
+                // Inherit some knowledge
+                child.memory.knownFoodLocations = [...this.memory.knownFoodLocations];
+                child.memory.dangerLocations = [...this.memory.dangerLocations];
+                
+                child.generation = this.generation + 1;
+                this.energy -= 50; // Reproduction costs energy
+                return child;
+            }
+
+            draw(ctx) {
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                ctx.fillStyle = this.color;
+                ctx.fill();
+                ctx.closePath();
+
+                const eyeRadius = this.radius / 5;
+                const eyeOffset = this.radius / 2;
+                ctx.fillStyle = 'white';
+                ctx.beginPath();
+                ctx.arc(this.x - eyeOffset, this.y - eyeOffset, eyeRadius, 0, Math.PI * 2);
+                ctx.arc(this.x + eyeOffset, this.y - eyeOffset, eyeRadius, 0, Math.PI * 2);
+                ctx.fill();
+
+                ctx.fillStyle = 'black';
+                ctx.beginPath();
+                ctx.arc(this.x - eyeOffset + this.velocity.x/2, this.y - eyeOffset + this.velocity.y/2, eyeRadius/2, 0, Math.PI * 2);
+                ctx.arc(this.x + eyeOffset + this.velocity.x/2, this.y - eyeOffset + this.velocity.y/2, eyeRadius/2, 0, Math.PI * 2);
+                ctx.fill();
+
+                ctx.fillStyle = 'white';
+                ctx.font = '12px Arial';
+                ctx.fillText(`Score: ${this.score}`, this.x - 20, this.y + this.radius + 15);
+                ctx.fillText(`Energy: ${Math.round(this.energy)}`, this.x - 25, this.y + this.radius + 30);
+                ctx.fillText(`Gen: ${this.generation}`, this.x - 20, this.y + this.radius + 45);
+                ctx.fillText(`State: ${this.state}`, this.x - 25, this.y + this.radius + 60);
+                ctx.fillText(`Comms: ${this.communications}`, this.x - 25, this.y + this.radius + 75);
+            }
+        }
+
+        class Predator {
+            constructor(x, y) {
+                this.x = x;
+                this.y = y;
+                this.radius = 30;
+                this.velocity = { x: 0, y: 0 };
+                this.acceleration = { x: 0, y: 0 };
+                this.maxSpeed = 1.5; // Reduced from 2
+                this.drainRate = 0.1;
+                this.visionRange = 300;
+                this.memory = {
+                    lastSeenAmoeba: null,
+                    knownAmoebas: []
+                };
+                this.intelligence = 0.5;
+            }
+
+            update(amoebas) {
+                let closestAmoeba = null;
+                let closestDistance = Infinity;
+
+                // Update memory and find closest amoeba
+                this.memory.knownAmoebas = this.memory.knownAmoebas.filter(a => Math.random() > 0.001);
+                for (let amoeba of amoebas) {
+                    const distance = Math.hypot(this.x - amoeba.x, this.y - amoeba.y);
+                    if (distance < this.visionRange) {
+                        if (!this.memory.knownAmoebas.some(a => a.x === amoeba.x && a.y === amoeba.y)) {
+                            this.memory.knownAmoebas.push({x: amoeba.x, y: amoeba.y});
+                        }
+                        if (distance < closestDistance) {
+                            closestAmoeba = amoeba;
+                            closestDistance = distance;
+                        }
+                    }
+
+                    // Drain energy if in contact with an amoeba
+                    if (distance < this.radius + amoeba.radius) {
+                        amoeba.energy -= this.drainRate;
+                    }
+                }
+
+                if (closestAmoeba) {
+                    this.memory.lastSeenAmoeba = {x: closestAmoeba.x, y: closestAmoeba.y};
+                    this.acceleration.x = (closestAmoeba.x - this.x) * 0.01 * this.intelligence;
+                    this.acceleration.y = (closestAmoeba.y - this.y) * 0.01 * this.intelligence;
+                } else if (this.memory.lastSeenAmoeba) {
+                    // Move towards last known location if no amoeba is currently visible
+                    this.acceleration.x = (this.memory.lastSeenAmoeba.x - this.x) * 0.005 * this.intelligence;
+                    this.acceleration.y = (this.memory.lastSeenAmoeba.y - this.y) * 0.005 * this.intelligence;
+                } else {
+                    // Random movement if no amoeba has been seen
+                    this.acceleration.x = (Math.random() - 0.5) * 0.1;
+                    this.acceleration.y = (Math.random() - 0.5) * 0.1;
+                }
+
+                this.velocity.x += this.acceleration.x;
+                this.velocity.y += this.acceleration.y;
+
+                const speed = Math.sqrt(this.velocity.x ** 2 + this.velocity.y ** 2);
+                if (speed > this.maxSpeed) {
+                    this.velocity.x = (this.velocity.x / speed) * this.maxSpeed;
+                    this.velocity.y = (this.velocity.y / speed) * this.maxSpeed;
+                }
+
+                this.x += this.velocity.x;
+                this.y += this.velocity.y;
+
+                this.x = Math.max(this.radius, Math.min(this.x, canvas.width - this.radius));
+                this.y = Math.max(this.radius, Math.min(this.y, canvas.height - this.radius));
+            }
+
+            draw(ctx) {
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                ctx.fillStyle = 'rgba(255, 0, 0, 0.7)';
+                ctx.fill();
+                ctx.closePath();
+
+                // Draw eyes
+                const eyeRadius = this.radius / 6;
+                const eyeOffset = this.radius / 2;
+                ctx.fillStyle = 'white';
+                ctx.beginPath();
+                ctx.arc(this.x - eyeOffset, this.y - eyeOffset, eyeRadius, 0, Math.PI * 2);
+                ctx.arc(this.x + eyeOffset, this.y - eyeOffset, eyeRadius, 0, Math.PI * 2);
+                ctx.fill();
+
+                ctx.fillStyle = 'black';
+                ctx.beginPath();
+                ctx.arc(this.x - eyeOffset + this.velocity.x, this.y - eyeOffset + this.velocity.y, eyeRadius/2, 0, Math.PI * 2);
+                ctx.arc(this.x + eyeOffset + this.velocity.x, this.y - eyeOffset + this.velocity.y, eyeRadius/2, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+
+        const amoebas = [
+            new Amoeba(canvas.width / 3, canvas.height / 2, 'rgba(255, 0, 0, 0.8)'),
+            new Amoeba(2 * canvas.width / 3, canvas.height / 2, 'rgba(0, 0, 255, 0.8)')
+        ];
+
+        let foods = [];
+        let predators = [];
+
+        function spawnFood(amount) {
+            for (let i = 0; i < amount; i++) {
+                foods.push({
+                    x: Math.random() * canvas.width,
+                    y: Math.random() * canvas.height
+                });
+            }
+        }
+
+        function drawFood(ctx) {
+            ctx.fillStyle = '#39FF14';
+            foods.forEach(food => {
+                ctx.beginPath();
+                ctx.arc(food.x, food.y, 5, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.closePath();
+            });
+        }
+
+        let lastTime = 0;
+        function animate(currentTime) {
+            const deltaTime = currentTime - lastTime;
+            lastTime = currentTime;
+
+            ctx.fillStyle = 'rgba(0, 31, 63, 0.3)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            drawFood(ctx);
+
+            for (let i = amoebas.length - 1; i >= 0; i--) {
+                const survived = amoebas[i].update(foods, amoebas, predators, deltaTime);
+                if (survived) {
+                    amoebas[i].draw(ctx);
+                } else {
+                    amoebas.splice(i, 1);
+                }
+            }
+
+            predators.forEach(predator => {
+                predator.update(amoebas);
+                predator.draw(ctx);
+            });
+
+            requestAnimationFrame(animate);
+        }
+
+        animate(0);
+
+        window.addEventListener('resize', () => {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        });
+
+        // Control buttons functionality
+        document.getElementById('addAmoeba').addEventListener('click', () => {
+            const colors = ['rgba(255,0,0,0.8)', 'rgba(0,255,0,0.8)', 'rgba(0,0,255,0.8)', 'rgba(255,255,0,0.8)'];
+            amoebas.push(new Amoeba(
+                Math.random() * canvas.width,
+                Math.random() * canvas.height,
+                colors[Math.floor(Math.random() * colors.length)]
+            ));
+        });
+
+        document.getElementById('removeAmoeba').addEventListener('click', () => {
+            if (amoebas.length > 1) {
+                amoebas.pop();
+            }
+        });
+
+        document.getElementById('addFood').addEventListener('click', () => {
+            spawnFood(5);
+        });
+
+        document.getElementById('togglePredator').addEventListener('click', () => {
+            if (predators.length === 0) {
+                predators.push(new Predator(canvas.width / 2, canvas.height / 2));
+            } else {
+                predators.pop();
+            }
+        });
+    </script>
+</body>
+</html>
